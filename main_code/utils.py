@@ -54,14 +54,18 @@ def find_n_nulls(A, B, D, M):
     return np.argmin(ses, axis=0)
 
 
-def compute_P(A, B):
+def compute_P(A, B, n_nulls=None):
+    '''n_nulls = vector or int specifiying the number of nulls per channel'''
     eigen_values, eigen_vectors = linalg.eig(A, B)
     eigen_values = eigen_values.real
     eigen_vectors = eigen_vectors.real
     ix = np.argsort(eigen_values)[::-1]
     D = eigen_vectors[:, ix].T
     M = linalg.pinv2(D)
-    n_nulls = find_n_nulls(A, B, D, M)
+    if n_nulls is None:
+        n_nulls = find_n_nulls(A, B, D, M)
+    else:
+        if not hasattr(n_nulls, "__len__"): n_nulls = np.array([n_nulls] * len(M))
     Ps = []
     for i, n_null in enumerate(n_nulls):
         DI = np.ones(M.shape[0])
@@ -72,21 +76,25 @@ def compute_P(A, B):
     return P, n_nulls
 
 
-def SASS(raw_stim, raw_no_stim,SASS_lfreq,SASS_hfreq,filter_type='long',filter_coeffs=None):
+def SASS(raw_stim, raw_no_stim,SASS_lfreq=None,SASS_hfreq=None,filter_type='long',filter_coeffs=None, n_nulls=None):
 
     if filter_type == 'short':
         data = filtfilt(filter_coeffs,1,raw_no_stim.copy()._data)
     elif filter_type == 'long':
         data = raw_no_stim.copy().filter(SASS_lfreq, SASS_hfreq)._data
+    else:
+        data = raw_stim._data
     B = np.cov(data)
 
     if filter_type == 'short':
         data = filtfilt(filter_coeffs,1,raw_stim.copy()._data)
     elif filter_type == 'long':
         data = raw_stim.copy().filter(SASS_lfreq, SASS_hfreq)._data
+    else:
+        data=raw_no_stim._data
     A = np.cov(data)
 
-    P, _ = compute_P(A, B)
+    P, _ = compute_P(A, B, n_nulls)
     raw_stim._data = P.dot(raw_stim._data)
 
     return raw_stim
@@ -160,6 +168,11 @@ def compute_phase_diff(signal1, signal2):
     return wrap(np.angle(hilbert(signal1,fft_len)) - np.angle(hilbert(signal2,fft_len)))[...,:signal_len]
 
 
+def compute_phase(signal1):
+    signal_len = signal1.shape[-1]
+    fft_len = next_fast_len(signal_len)
+    return np.angle(hilbert(signal1,fft_len)[...,:signal_len])
+
 
 def get_target_chan(raw,inner_pick,outer_picks):
     """Computes the laplace over 3 input electrodes"""
@@ -196,6 +209,30 @@ def find_bad_channels(raw,use_zscore=False):
     bads_sat = ch_names[np.any(np.abs(raw._data) > 0.4, axis=1)]
     return np.unique(np.concatenate((bads_zscore, bads_sat)))
 
+
 def sine_func(x,a,b, offset):
     # sine wave for curve fit
     return np.abs(a)*np.sin(2*np.pi*(1/8)*x+b) + offset
+
+
+def get_flicker_events(raw, threshold=3, miniti_sec=0.4, name="audio"):
+    # Get the time points of the flicker as well as the onset of one flicker set (separated by a ITI)
+    audio_events = np.where(np.diff(
+        (np.abs(stats.zscore(raw.copy().pick_channels([name])._data.flatten())) > threshold).astype(
+            'int')) > 0)[0]
+    miniti = raw.time_as_index(miniti_sec)[0]
+    audio_events_onset = [audio_events[ix] for ix in range(1, audio_events.size)
+                            if audio_events[ix] - audio_events[ix - 1] > miniti]
+    return audio_events, audio_events_onset
+
+def compute_ITC(phase_signal, events, trial_length=2, sfreq=500):
+    '''Compute the inter trial coherence between a phase of a signal and the phase of a  flicker (determined by onset events with specific trial length)'''
+    t = np.arange(0,trial_length,1/sfreq)
+    phases_flicker_trial = wrap(2*np.pi*10*t)
+    nsamp_trial = phases_flicker_trial.size
+    nsamp_start = 0
+    phasediffs = []
+    for ev in events:
+        if ev < len(phase_signal)-nsamp_trial:
+            phasediffs.append(circ_mean(wrap(phase_signal[ev+nsamp_start:ev+nsamp_trial]-phases_flicker_trial[nsamp_start:])))
+    return plv(np.array(phasediffs)), np.array(phasediffs)
