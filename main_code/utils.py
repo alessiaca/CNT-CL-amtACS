@@ -83,7 +83,7 @@ def SASS(raw_stim, raw_no_stim,SASS_lfreq=None,SASS_hfreq=None,filter_type='long
     elif filter_type == 'long':
         data = raw_no_stim.copy().filter(SASS_lfreq, SASS_hfreq)._data
     else:
-        data = raw_stim._data
+        data = raw_no_stim._data
     B = np.cov(data)
 
     if filter_type == 'short':
@@ -91,7 +91,7 @@ def SASS(raw_stim, raw_no_stim,SASS_lfreq=None,SASS_hfreq=None,filter_type='long
     elif filter_type == 'long':
         data = raw_stim.copy().filter(SASS_lfreq, SASS_hfreq)._data
     else:
-        data=raw_no_stim._data
+        data=raw_stim._data
     A = np.cov(data)
 
     P, _ = compute_P(A, B, n_nulls)
@@ -168,10 +168,11 @@ def compute_phase_diff(signal1, signal2):
     return wrap(np.angle(hilbert(signal1,fft_len)) - np.angle(hilbert(signal2,fft_len)))[...,:signal_len]
 
 
-def compute_phase(signal1):
-    signal_len = signal1.shape[-1]
+def compute_phase(signal):
+    """Compute the phase of a signal using the hilbert transform (with optimal length for faster computation)"""
+    signal_len = signal.shape[-1]
     fft_len = next_fast_len(signal_len)
-    return np.angle(hilbert(signal1,fft_len)[...,:signal_len])
+    return np.angle(hilbert(signal, fft_len)[..., :signal_len])
 
 
 def get_target_chan(raw,inner_pick,outer_picks):
@@ -206,7 +207,7 @@ def find_bad_channels(raw,use_zscore=False):
         bads_zscore = ch_names[np.abs(zscore(vars)) > 1.645]
     else:
         bads_zscore = []
-    bads_sat = ch_names[np.any(np.abs(raw._data) > 0.4, axis=1)]
+    bads_sat = ch_names[np.any(np.abs(raw._data) > 0.02, axis=1)]
     return np.unique(np.concatenate((bads_zscore, bads_sat)))
 
 
@@ -225,10 +226,10 @@ def get_flicker_events(raw, threshold=3, miniti_sec=0.4, name="audio"):
                             if audio_events[ix] - audio_events[ix - 1] > miniti]
     return audio_events, audio_events_onset
 
-def compute_ITC(phase_signal, events, trial_length=2, sfreq=500):
+def compute_ITC(phase_signal, events, trial_length=2, sfreq=500, frequency=10):
     '''Compute the inter trial coherence between a phase of a signal and the phase of a  flicker (determined by onset events with specific trial length)'''
     t = np.arange(0,trial_length,1/sfreq)
-    phases_flicker_trial = wrap(2*np.pi*10*t)
+    phases_flicker_trial = wrap(2*np.pi*frequency*t)
     nsamp_trial = phases_flicker_trial.size
     nsamp_start = 0
     phasediffs = []
