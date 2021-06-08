@@ -3,29 +3,22 @@
 # Prepare environment
 import numpy as np
 import mne
-from mne.time_frequency import psd_welch, psd_array_welch,tfr_array_morlet
 import matplotlib.pyplot as plt
-from scipy.fftpack import next_fast_len
-from scipy.signal import hilbert
-import tkinter as tk
-from tkinter import filedialog
-from scipy.io import savemat, loadmat
-from scipy import linalg, stats
-from scipy.optimize import curve_fit
+import itertools
 from main_code.utils import find_bad_channels, get_flicker_events, \
-      SASS, compute_phase, compute_ITC
-from scipy.signal import firwin, filtfilt
-from ordpy.ordpy import permutation_entropy
+      SASS, compute_phase, compute_ITC, compare_rank_vector_distribution
+from ordpy.ordpy import permutation_entropy, ordinal_distribution, ordinal_sequence
 from pyriemann.utils.distance import distance_riemann, distance_kullback, distance_euclid
 
 # Loop over the flicker dataset
 
-# Set the folder path
+# Set the folder path and some other parameters
 folder_path = "C:/Users/alessia/Charité - Universitätsmedizin Berlin/Haslacher, David - SASS_data/"
 n_par = 6
 frequency = 10; lfreq = frequency - 1; hfreq = frequency + 1
 plot_polar = False
 dx = 5; taux = 25
+all_rank_vectors = np.array(list(itertools.permutations(range(dx), dx))) # Array of all possible rank vectors
 
 for i_par in range(1, n_par+1):
 
@@ -61,17 +54,29 @@ for i_par in range(1, n_par+1):
     phase_no_stim = compute_phase(raw_no_stim._data[chidx])
     phase_stim = compute_phase(raw_stim._data[chidx])
 
-    # Compute the ITC, permutation entropy and other measures of the data
+    # Compute the measures for the data without and with stimulation (before artifact rejection)
+    # Compute the ITC
     ITC_no_stim, phase_diffs_no_stim = compute_ITC(phase_no_stim, no_stim_flicker_event_onset)
     ITC_stim, phase_diffs_stim = compute_ITC(phase_stim, stim_flicker_event_onset)
-    Cov_no_stim = np.median(np.cov(raw_no_stim._data)); Cov_stim = np.median(np.cov(raw_stim._data))
+
+    # Compute the covariance
+    Cov_no_stim = np.median(np.cov(raw_no_stim._data))
+    Cov_stim = np.median(np.cov(raw_stim._data))
+
+    # Compute the permutation entropy
     PE_no_stim = permutation_entropy(raw_no_stim._data[chidx], dx=dx, taux=taux)
     PE_stim = permutation_entropy(raw_stim._data[chidx], dx=dx, taux=taux)
-    RD_stim = distance_euclid(np.cov(raw_no_stim._data), np.cov(raw_stim._data))
+
+    # Compute the distance between the rank vector distributions
+    RVDD_stim, probs_no_stim_ordered = compare_rank_vector_distribution(raw_stim._data[chidx], raw_no_stim._data[chidx],
+                                                                        dx=dx, taux=taux, all_rank_vectors=all_rank_vectors)
+
+    # Compute the distance between the covaraince matrices
+    CD_stim = distance_euclid(np.cov(raw_no_stim._data), np.cov(raw_stim._data))
 
     # Compute the measures for each number of deleted nulls
     ITCs = np.zeros((n_chans, 1)); PEs = np.zeros((n_chans, 1)); Covs = np.zeros((n_chans, 1))
-    RDs = np.zeros((n_chans, 1))
+    CDs = np.zeros((n_chans, 1)); RVDDs = np.zeros((n_chans, 1))
     for n_null in range(n_chans):
 
         print(f"{n_null} out of {n_chans}")
@@ -86,7 +91,10 @@ for i_par in range(1, n_par+1):
         ITCs[n_null] = ITC
         Covs[n_null] = np.median(np.cov(raw_stim_SASS._data))
         PEs[n_null] = permutation_entropy(raw_stim_SASS._data[chidx], dx=dx, taux=taux)
-        RDs[n_null] = distance_euclid(np.cov(raw_no_stim._data), np.cov(raw_stim_SASS._data))
+        RVDDs[n_null], _ = compare_rank_vector_distribution(raw_stim_SASS._data[chidx], raw_no_stim._data[chidx],
+                                                     dx=dx, taux=taux, all_rank_vectors=all_rank_vectors,
+                                                     probs2_ordered=probs_no_stim_ordered)
+        CDs[n_null] = distance_euclid(np.cov(raw_no_stim._data), np.cov(raw_stim_SASS._data))
 
         # Plot the polar histogram of mean phase differences (for visual inspection)
         if plot_polar:
@@ -98,7 +106,7 @@ for i_par in range(1, n_par+1):
 
     # Plot the relation between deleted nulls and the measures
     plt.figure()
-    plt.subplot(2,2,1)
+    plt.subplot(2,3,1)
     plt.plot(range(n_chans), ITCs)
     plt.axhline(ITC_no_stim, color="g", label="No stim"); plt.axhline(ITC_stim, color="r", label="Stim")
     n_nulls = np.argmin(np.abs(ITCs-ITC_no_stim))
@@ -107,7 +115,7 @@ for i_par in range(1, n_par+1):
     plt.xlabel("#nulls"); plt.ylabel("ITC")
     plt.legend()
 
-    plt.subplot(2,2,2)
+    plt.subplot(2,3,2)
     plt.plot(range(n_chans), PEs)
     plt.axhline(PE_no_stim, color="g", label="No stim"); plt.axhline(PE_stim, color="r", label="Stim")
     n_nulls = np.argmin(np.abs(PEs - PE_no_stim))
@@ -116,7 +124,7 @@ for i_par in range(1, n_par+1):
     plt.xlabel("#nulls"); plt.ylabel("Permutation Entropy")
     plt.legend()
 
-    plt.subplot(2,2,3)
+    plt.subplot(2,3,3)
     plt.plot(range(n_chans), Covs)
     plt.axhline(Cov_no_stim, color="g", label="No stim"); plt.axhline(Cov_stim, color="r", label="Stim")
     n_nulls = np.argmin(np.abs(Covs-Cov_no_stim))
@@ -125,12 +133,21 @@ for i_par in range(1, n_par+1):
     plt.xlabel("#nulls"); plt.ylabel("Mean Covariance")
     plt.legend()
 
-    plt.subplot(2,2,4)
-    plt.plot(range(n_chans), RDs)
-    plt.axhline(RD_stim, color="g", label="stim")
+    plt.subplot(2,3,4)
+    plt.plot(range(n_chans), CDs)
+    plt.axhline(CD_stim, color="g", label="stim")
     plt.xlabel("#nulls"); plt.ylabel("Distance no_stim-stim")
-    n_nulls = np.argmin(RDs)
-    plt.annotate(n_nulls, (n_nulls, RDs[n_nulls]))
-    plt.plot(n_nulls, RDs[n_nulls], 'o')
-    plt.legend(); plt.show()
-    print("debug")
+    n_nulls = np.argmin(CDs)
+    plt.annotate(n_nulls, (n_nulls, CDs[n_nulls]))
+    plt.plot(n_nulls, CDs[n_nulls], 'o')
+    plt.legend()
+
+    plt.subplot(2, 3, 5)
+    plt.plot(range(n_chans), RVDDs)
+    plt.axhline(RVDD_stim, color="g", label="stim")
+    plt.xlabel("#nulls"); plt.ylabel("Distance rank vector distribution")
+    n_nulls = np.argmin(RVDDs)
+    plt.annotate(n_nulls, (n_nulls, RVDDs[n_nulls]))
+    plt.plot(n_nulls, RVDDs[n_nulls], 'o')
+    plt.legend();
+print("debug")

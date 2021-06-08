@@ -6,12 +6,13 @@ import mne
 from mne.time_frequency import psd_multitaper, psd_welch
 import matplotlib.pyplot as plt
 from scipy import stats, linalg
-from scipy.stats import median_absolute_deviation, zscore
+from scipy.stats import median_absolute_deviation, zscore, wasserstein_distance
 from mne.preprocessing import compute_current_source_density
 from mne.time_frequency import psd_welch, psd_array_welch
 from scipy.signal import hilbert
 from scipy.signal import firwin, filtfilt
 from scipy.fftpack import next_fast_len
+from ordpy.ordpy import ordinal_distribution
 
 
 def circ_mean(phases):
@@ -237,3 +238,25 @@ def compute_ITC(phase_signal, events, trial_length=2, sfreq=500, frequency=10):
         if ev < len(phase_signal)-nsamp_trial:
             phasediffs.append(circ_mean(wrap(phase_signal[ev+nsamp_start:ev+nsamp_trial]-phases_flicker_trial[nsamp_start:])))
     return plv(np.array(phasediffs)), np.array(phasediffs)
+
+
+def compare_rank_vector_distribution(signal1, signal2, dx, taux, all_rank_vectors, probs2_ordered=None):
+    "Compare the rank vector distribution of the given signals, possibility to input one probability distribution"
+
+    # Compute the ordinal distribution of signal1
+    vectors1, probs1 = ordinal_distribution(signal1, dx=dx, taux=taux)
+    # Order the probabilities in respect to the rank vectors (no all rank vectors are used and they are in
+    # different orders)
+    idx1 = np.array([[i for i, row in enumerate(all_rank_vectors) if (x == row).all()] for x in vectors1])
+    probs1_ordered = np.zeros((all_rank_vectors.shape[0], 1))
+    probs1_ordered[idx1.flatten()] = probs1[:, np.newaxis]
+
+    # If the ordered probability distribution is not given generate it
+    if not probs2_ordered:
+        vectors2, probs2 = ordinal_distribution(signal2, dx=dx, taux=taux)
+        idx2 = np.array([[i for i, row in enumerate(all_rank_vectors) if (x == row).all()] for x in vectors2])
+        probs2_ordered = np.zeros((all_rank_vectors.shape[0], 1))
+        probs2_ordered[idx2.flatten()] = probs2[:,np.newaxis]
+
+    # Compute the distance between the distributions
+    return wasserstein_distance(probs1_ordered.flatten(), probs2_ordered.flatten()), probs2_ordered
